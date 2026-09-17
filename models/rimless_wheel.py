@@ -40,9 +40,9 @@ def dynamics(state, params):
 
 def detect_impact(state, params):
     """
-    Return the impact guard value.
+    Return the forward-impact guard value.
 
-    Impact occurs when:
+    The next spoke (downhill) contacts the ground when:
         theta = gamma + alpha
     """
     slope = params["slope"]
@@ -51,19 +51,38 @@ def detect_impact(state, params):
     return state[0] - (slope + alpha)
 
 
-def reset(state, params):
+def detect_backward_impact(state, params):
+    """
+    Return the backward-impact guard value.
+
+    If the wheel rotates uphill instead, the trailing spoke
+    (the one that just lifted off at the last forward impact)
+    contacts the ground again when:
+        theta = gamma - alpha
+    """
+    slope = params["slope"]
+    alpha = calculate_alpha(params)
+
+    return state[0] - (slope - alpha)
+
+
+def reset(state, params, direction=1):
     """
     Apply the impact/reset map.
 
-    theta_plus = theta_minus - 2*alpha
-    theta_dot_plus = theta_dot_minus*cos(2*alpha)
+    direction=+1 (forward roll, next spoke touches down):
+        theta_plus = theta_minus - 2*alpha
+    direction=-1 (backward roll, trailing spoke touches down):
+        theta_plus = theta_minus + 2*alpha
+
+    In both cases: theta_dot_plus = theta_dot_minus*cos(2*alpha)
     """
     alpha = calculate_alpha(params)
 
     theta_minus = state[0]
     theta_dot_minus = state[1]
 
-    theta_plus = theta_minus - 2.0 * alpha
+    theta_plus = theta_minus - direction * 2.0 * alpha
     theta_dot_plus = theta_dot_minus * np.cos(2.0 * alpha)
 
     return np.array([

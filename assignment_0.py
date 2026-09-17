@@ -34,7 +34,7 @@ for step, t in enumerate(time_traj[:-1]):
 # constant. If we turn on the damping coefficient, it should slowly bleed out energy until it comes to
 # a stand-still.
 
-potential_energy, kinetic_energy = model.calculate_energy(state_traj, params)
+kinetic_energy, potential_energy = model.calculate_energy(state_traj, params)
 
 plt.figure()
 plt.plot(time_traj, potential_energy, label="Potential energy")
@@ -48,3 +48,25 @@ plt.tight_layout()
 plt.show()
 
 # TODO: make a phase portrait plot
+# Phase portrait
+
+theta = np.linspace(-2 * np.pi, 2 * np.pi, 25)
+theta_dot = np.linspace(-10, 10, 25)
+
+THETA, THETA_DOT = np.meshgrid(theta, theta_dot)
+
+THETA_DOT_FIELD = THETA_DOT
+THETA_DDOT_FIELD = -params["gravity"] / params["length"] * np.sin(THETA)
+
+plt.figure()
+plt.quiver(
+    THETA,
+    THETA_DOT,
+    THETA_DOT_FIELD,
+    THETA_DDOT_FIELD,
+)
+
+plt.xlabel(r"$\theta$ (rad)")
+plt.ylabel(r"$\dot{\theta}$ (rad/s)")
+plt.title("Pendulum phase portrait")
+plt.show()

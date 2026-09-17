@@ -69,7 +69,7 @@ def simulate_one_step(
 ):
     """
     Simulate the rimless wheel from one post-impact
-    state until the next impact.
+    state until the next impact (forward or backward).
 
     Returns:
         pre_impact_state
@@ -88,10 +88,42 @@ def simulate_one_step(
     trajectory_time = [time]
     trajectory_state = [state.copy()]
 
-    old_guard = model.detect_impact(
+    old_forward_guard = model.detect_impact(
         state,
         params,
     )
+
+    old_backward_guard = model.detect_backward_impact(
+        state,
+        params,
+    )
+
+    # If the initial state already sits at or past a contact
+    # boundary *and* is moving further into it, treat it as an
+    # impact immediately instead of integrating outside the valid
+    # stance interval, where the crossing check below would never
+    # trigger. The velocity check matters because every ordinary
+    # post-impact state sits exactly on the *other* guard (e.g.
+    # right after a forward impact, theta == gamma - alpha, so
+    # old_backward_guard == 0) while moving away from it - that
+    # must NOT be treated as an immediate second impact.
+    theta_dot = state[1]
+
+    if old_forward_guard >= 0.0 and theta_dot >= 0.0:
+        return (
+            state,
+            model.reset(state, params, direction=1),
+            np.array(trajectory_time),
+            np.array(trajectory_state),
+        )
+
+    if old_backward_guard <= 0.0 and theta_dot <= 0.0:
+        return (
+            state,
+            model.reset(state, params, direction=-1),
+            np.array(trajectory_time),
+            np.array(trajectory_state),
+        )
 
     while time < max_time:
 
@@ -101,24 +133,61 @@ def simulate_one_step(
             params,
         )
 
-        new_guard = model.detect_impact(
+        new_forward_guard = model.detect_impact(
             new_state,
             params,
         )
 
-        # Detect crossing of the impact surface.
-        if old_guard < 0.0 and new_guard >= 0.0:
+        new_backward_guard = model.detect_backward_impact(
+            new_state,
+            params,
+        )
+
+        # Detect crossing of the forward impact surface.
+        if old_forward_guard < 0.0 and new_forward_guard >= 0.0:
 
             impact_state = interpolate_impact(
                 state,
                 new_state,
-                old_guard,
-                new_guard,
+                old_forward_guard,
+                new_forward_guard,
             )
 
             post_impact_state = model.reset(
                 impact_state,
                 params,
+                direction=1,
+            )
+
+            trajectory_time.append(
+                time + dt
+            )
+
+            trajectory_state.append(
+                impact_state.copy()
+            )
+
+            return (
+                impact_state,
+                post_impact_state,
+                np.array(trajectory_time),
+                np.array(trajectory_state),
+            )
+
+        # Detect crossing of the backward impact surface.
+        if old_backward_guard > 0.0 and new_backward_guard <= 0.0:
+
+            impact_state = interpolate_impact(
+                state,
+                new_state,
+                old_backward_guard,
+                new_backward_guard,
+            )
+
+            post_impact_state = model.reset(
+                impact_state,
+                params,
+                direction=-1,
             )
 
             trajectory_time.append(
@@ -137,7 +206,8 @@ def simulate_one_step(
             )
 
         state = new_state
-        old_guard = new_guard
+        old_forward_guard = new_forward_guard
+        old_backward_guard = new_backward_guard
 
         time += dt
 
@@ -158,6 +228,10 @@ def simulate_steps(
     """
     Simulate multiple stance phases and impacts.
 
+    Stops early (without raising) if an impact fails to occur
+    within a single stance phase, so callers can see how many
+    steps were actually completed.
+
     Returns:
         states_after_impact
         states_before_impact
@@ -173,16 +247,19 @@ def simulate_steps(
 
     for _ in range(num_steps):
 
-        (
-            pre_impact,
-            post_impact,
-            _,
-            _,
-        ) = simulate_one_step(
-            state,
-            params,
-            dt=dt,
-        )
+        try:
+            (
+                pre_impact,
+                post_impact,
+                _,
+                _,
+            ) = simulate_one_step(
+                state,
+                params,
+                dt=dt,
+            )
+        except RuntimeError:
+            break
 
         states_before_impact.append(
             pre_impact.copy()
@@ -440,12 +517,26 @@ def plot_return_map(params):
         )
     )
 
+    theoretical_next_velocity = (
+        model.theoretical_return_map(
+            velocity_values,
+            params,
+        )
+    )
+
     plt.figure()
 
     plt.plot(
         velocity_values,
         next_velocity,
         label="Numerical return map",
+    )
+
+    plt.plot(
+        velocity_values,
+        theoretical_next_velocity,
+        "--",
+        label="Theoretical return map",
     )
 
     plt.plot(
@@ -568,46 +659,52 @@ def classify_initial_condition(
     params,
     num_steps=40,
     tolerance=1e-4,
+    dt=5e-3,
 ):
     """
     Classify an initial condition.
 
     Returns:
-        1 -> converges to rolling limit cycle
-        0 -> does not converge
+        1  -> converges to the forward-rolling limit cycle
+        -1 -> never reaches an impact (rocks in place, never falls)
+        0  -> impacts occur, but the wheel does not settle into
+              the forward-rolling limit cycle within num_steps
+
+    Uses a coarser dt than the return-map/Floquet analysis and
+    stops as soon as convergence is detected, instead of always
+    running the full num_steps - classification only needs to know
+    whether a trajectory settles down, not a precise trajectory,
+    and this function is called once per region-of-attraction grid
+    point, so its cost dominates that computation.
     """
 
-    try:
+    fixed_point = model.theoretical_fixed_point(params)
 
-        states_after, _ = simulate_steps(
-            initial_state,
-            params,
-            num_steps=num_steps,
-        )
+    state = np.array(initial_state, dtype=float)
+    recent_velocities = []
 
-    except RuntimeError:
+    for step in range(num_steps):
 
-        return 0
+        try:
+            _, post_impact, _, _ = simulate_one_step(
+                state,
+                params,
+                dt=dt,
+            )
+        except RuntimeError:
+            return -1 if step == 0 else 0
 
-    fixed_point = (
-        model.theoretical_fixed_point(
-            params
-        )
-    )
+        recent_velocities.append(post_impact[1])
 
-    final_velocities = (
-        states_after[-5:, 1]
-    )
+        if len(recent_velocities) > 5:
+            recent_velocities.pop(0)
 
-    error = np.abs(
-        final_velocities
-        - fixed_point
-    )
+        if len(recent_velocities) == 5:
+            error = np.abs(np.array(recent_velocities) - fixed_point)
+            if np.all(error < tolerance):
+                return 1
 
-    if np.all(
-        error < tolerance
-    ):
-        return 1
+        state = post_impact
 
     return 0
 
@@ -661,9 +758,13 @@ def plot_roa(params):
         params
     )
 
+    # theta is restricted to the physically valid stance interval:
+    # the stance spoke's angle only ever ranges from gamma - alpha
+    # (just after impact) to gamma + alpha (just before the next
+    # impact) - anything outside that is not a real stance state.
     theta_values = np.linspace(
-        params["slope"] - 2.0 * alpha,
-        params["slope"] + 2.0 * alpha,
+        params["slope"] - alpha,
+        params["slope"] + alpha,
         50,
     )
 
@@ -681,11 +782,14 @@ def plot_roa(params):
 
     plt.figure()
 
-    plt.pcolormesh(
+    mesh = plt.pcolormesh(
         theta_values,
         velocity_values,
         roa,
         shading="auto",
+        cmap="coolwarm",
+        vmin=-1,
+        vmax=1,
     )
 
     plt.xlabel(r"$\theta$")
@@ -695,9 +799,13 @@ def plot_roa(params):
         "Estimated Region of Attraction"
     )
 
-    plt.colorbar(
-        label="Converges to rolling cycle"
-    )
+    colorbar = plt.colorbar(mesh, ticks=[-1, 0, 1])
+
+    colorbar.ax.set_yticklabels([
+        "Never impacts (standing)",
+        "Unresolved / transient",
+        "Converges to rolling cycle",
+    ])
 
     plt.tight_layout()
     plt.show()
@@ -870,6 +978,119 @@ def sweep_spokes(params):
 
 
 # ============================================================
+# REGION-OF-ATTRACTION SWEEPS
+# ============================================================
+
+def calculate_roa_grid(params, num_theta=30, num_velocity=30):
+    """
+    Calculate a coarser, faster RoA grid for use inside parameter
+    sweeps, where several RoA maps get computed back to back.
+    """
+
+    alpha = model.calculate_alpha(params)
+
+    theta_values = np.linspace(
+        params["slope"] - alpha,
+        params["slope"] + alpha,
+        num_theta,
+    )
+
+    velocity_values = np.linspace(
+        -3.0,
+        3.0,
+        num_velocity,
+    )
+
+    roa = calculate_roa(
+        params,
+        theta_values,
+        velocity_values,
+    )
+
+    return theta_values, velocity_values, roa
+
+
+def sweep_slope_roa(params, slope_degrees=(3.0, 6.0, 9.0, 12.0)):
+    """
+    Compare the region of attraction across several slope angles.
+    """
+
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(9, 7),
+        sharey=True,
+    )
+
+    for slope_degree, ax in zip(slope_degrees, axes.ravel()):
+
+        test_params = params.copy()
+        test_params["slope"] = np.deg2rad(slope_degree)
+
+        theta_values, velocity_values, roa = calculate_roa_grid(
+            test_params
+        )
+
+        ax.pcolormesh(
+            theta_values,
+            velocity_values,
+            roa,
+            shading="auto",
+            cmap="coolwarm",
+            vmin=-1,
+            vmax=1,
+        )
+
+        ax.set_title(f"slope = {slope_degree:.0f} deg")
+        ax.set_xlabel(r"$\theta$")
+        ax.set_ylabel(r"$\dot{\theta}$")
+
+    fig.suptitle("Region of Attraction vs. Slope")
+    fig.tight_layout()
+    plt.show()
+
+
+def sweep_spokes_roa(params, spoke_counts=(6, 8, 10, 12)):
+    """
+    Compare the region of attraction across several spoke counts.
+    """
+
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(9, 7),
+        sharey=True,
+    )
+
+    for num_spokes, ax in zip(spoke_counts, axes.ravel()):
+
+        test_params = params.copy()
+        test_params["num_spokes"] = int(num_spokes)
+
+        theta_values, velocity_values, roa = calculate_roa_grid(
+            test_params
+        )
+
+        ax.pcolormesh(
+            theta_values,
+            velocity_values,
+            roa,
+            shading="auto",
+            cmap="coolwarm",
+            vmin=-1,
+            vmax=1,
+        )
+
+        ax.set_title(f"N = {num_spokes} spokes")
+        ax.set_xlabel(r"$\theta$")
+        ax.set_ylabel(r"$\dot{\theta}$")
+
+    fig.suptitle("Region of Attraction vs. Number of Spokes")
+    fig.tight_layout()
+    plt.show()
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -971,5 +1192,17 @@ if __name__ == "__main__":
     # --------------------------------------------------------
 
     sweep_spokes(
+        params
+    )
+
+    # --------------------------------------------------------
+    # Region-of-attraction sweeps
+    # --------------------------------------------------------
+
+    sweep_slope_roa(
+        params
+    )
+
+    sweep_spokes_roa(
         params
     )
