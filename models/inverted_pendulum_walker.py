@@ -9,24 +9,73 @@ import numpy as np
 
 
 def generate_params():
-    pass
+    """Return default inverted-pendulum-walker parameters."""
+    return {
+        "gravity": 9.81,
+        "length": 1.0,
+        "mass": 1.0,
+        "incline": 0.06,
+        "angle_of_attack": np.pi / 8,
+        "ankle_torque": 0.0,
+    }
 
 
 def dynamics(t, state, params):
-    # TODO: implement the state derivative.
-    return np.array([0.0, 0.0])
+    # state = [theta, theta_dot], inverted pendulum + ankle torque input
+    gravity = params["gravity"]
+    length = params["length"]
+    mass = params["mass"]
+    ankle_torque = params.get("ankle_torque", 0.0)
+
+    theta = state[0]
+    theta_dot = state[1]
+
+    theta_ddot = (
+        gravity / length * np.sin(theta)
+        + ankle_torque / (mass * length**2)
+    )
+
+    return np.array([theta_dot, theta_ddot])
 
 
 def event_guard(previous_state, next_state, params):
-    pass
+    # footstrike when theta crosses incline + angle_of_attack, same as rimless wheel
+    incline = params["incline"]
+    angle_of_attack = params["angle_of_attack"]
+    touchdown_angle = incline + angle_of_attack
+
+    previous_guard = previous_state[0] - touchdown_angle
+    next_guard = next_state[0] - touchdown_angle
+
+    return previous_guard < 0.0 and next_guard >= 0.0
 
 
 def event_dynamics(state, params):
-    pass
+    # same ballistic-collision reset as the rimless wheel
+    angle_of_attack = params["angle_of_attack"]
+
+    theta_minus = state[0]
+    theta_dot_minus = state[1]
+
+    theta_plus = theta_minus - 2.0 * angle_of_attack
+    theta_dot_plus = theta_dot_minus * np.cos(2.0 * angle_of_attack)
+
+    return np.array([theta_plus, theta_dot_plus])
 
 
 def calculate_energy(state, params):
-    pass
+    # ignores work done by ankle torque, so only conserved when ankle_torque == 0
+    mass = params["mass"]
+    gravity = params["gravity"]
+    length = params["length"]
+
+    theta = state[0]
+    theta_dot = state[1]
+
+    kinetic = 0.5 * mass * length**2 * theta_dot**2
+    potential = mass * gravity * length * np.cos(theta)
+
+    return kinetic, potential, kinetic + potential
 
 
 def visualize(
