@@ -20,7 +20,7 @@ def generate_params():
     }
 
 
-def dynamics(t, state, params):
+def evaluate_dynamics(t, state, params):
     # state = [theta, theta_dot], inverted pendulum + ankle torque input
     gravity = params["gravity"]
     length = params["length"]
