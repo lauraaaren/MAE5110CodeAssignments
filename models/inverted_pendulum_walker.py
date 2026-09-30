@@ -20,7 +20,13 @@ def generate_params():
     }
 
 
-def evaluate_dynamics(t, state, params):
+def generate_initial_condition():
+    """Return the default post-impact state [theta, angular velocity]."""
+    params = generate_params()
+    return np.array([params["incline"] - params["angle_of_attack"], 1.5])
+
+
+def dynamics(t, state, params):
     # state = [theta, theta_dot], inverted pendulum + ankle torque input
     gravity = params["gravity"]
     length = params["length"]
@@ -36,6 +42,10 @@ def evaluate_dynamics(t, state, params):
     )
 
     return np.array([theta_dot, theta_ddot])
+
+
+# Preserve the function name used by the Assignment 2 simulation.
+evaluate_dynamics = dynamics
 
 
 def event_guard(previous_state, next_state, params):
