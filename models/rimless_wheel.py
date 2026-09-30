@@ -17,7 +17,13 @@ def calculate_alpha(params):
     return np.pi / params["num_spokes"]
 
 
-def dynamics(state, params):
+def generate_initial_condition():
+    """Return the default post-impact state [theta, angular velocity]."""
+    params = generate_params()
+    return np.array([params["slope"] - calculate_alpha(params), 1.5])
+
+
+def dynamics(t, state, params):
     """
     Continuous rimless-wheel dynamics.
 
