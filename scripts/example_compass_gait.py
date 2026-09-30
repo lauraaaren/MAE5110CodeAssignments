@@ -7,7 +7,12 @@
 # downhill walking.
 
 # %% Imports
+import sys
 from pathlib import Path
+
+# Direct script execution adds scripts/, rather than the repository root, to sys.path.
+if "__file__" in globals() and Path(__file__).resolve().parent.name == "scripts":
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import matplotlib.pyplot as plt
 import numpy as np
