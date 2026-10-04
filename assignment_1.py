@@ -8,24 +8,27 @@ from models import rimless_wheel as model
 # NUMERICAL INTEGRATION
 # ============================================================
 
-def rk4_step(state, dt, params):
+def rk4_step(state, dt, params, t=0.0):
     """
-    Take one fourth-order Runge-Kutta integration step.
+    Take one fourth-order Runge-Kutta integration step starting at time t.
     """
 
-    k1 = model.dynamics(state, params)
+    k1 = model.dynamics(t, state, params)
 
     k2 = model.dynamics(
+        t + 0.5 * dt,
         state + 0.5 * dt * k1,
         params,
     )
 
     k3 = model.dynamics(
+        t + 0.5 * dt,
         state + 0.5 * dt * k2,
         params,
     )
 
     k4 = model.dynamics(
+        t + dt,
         state + dt * k3,
         params,
     )
@@ -131,6 +134,7 @@ def simulate_one_step(
             state,
             dt,
             params,
+            t=time,
         )
 
         new_forward_guard = model.detect_impact(
